@@ -81,7 +81,7 @@ def test_atomic_and_api(dtype, sem, scope, BLOCK_SIZE):
     shmem.barrier()
 
     # All ranks start out with a full mask vector 0xFFFFFF (initial_mask)
-    # All ranks then take turns in clearing the their bit position in the mask
+    # All ranks then take turns in clearing their bit position in the mask
     # By the end we would have effective_bits - num_ranks many ones followed by num_ranks zeros
     expected_scalar = ~((1 << num_ranks) - 1) & initial_mask
     expected = torch.full((BLOCK_SIZE,), expected_scalar, dtype=dtype, device="cuda")

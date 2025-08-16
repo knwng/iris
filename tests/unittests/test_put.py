@@ -50,7 +50,7 @@ def put_kernel(
         32,
     ],
 )
-def test_get_api(dtype, BLOCK_SIZE):
+def test_put_api(dtype, BLOCK_SIZE):
     # TODO: Adjust heap size.
     shmem = iris.iris(1 << 20)
     num_ranks = shmem.get_num_ranks()

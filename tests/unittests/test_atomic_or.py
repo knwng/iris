@@ -80,7 +80,7 @@ def test_atomic_or_api(dtype, sem, scope, BLOCK_SIZE):
     expected_scalar = (1 << effective_bits) - 1
 
     # All ranks start out with a zero mask
-    # All ranks then take turns in sertting the their bit position in the mask to 1
+    # All ranks then take turns in setting the their bit position in the mask to 1
     # By the end we would have a bit vector with num_ranks many 1's as long as num_ranks <= bit_width
     # or a full bit vector if num_ranks > bit_width
     expected = torch.full((BLOCK_SIZE,), expected_scalar, dtype=dtype, device="cuda")
