@@ -19,18 +19,14 @@ def load_kernel(
 ):
     pid = tl.program_id(0)
 
+    partner = int((source_rank + num_ranks // 2) % num_ranks)
     # Compute start index of this block
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
 
     # Guard for out-of-bounds accesses
     mask = offsets < BLOCK_SIZE
-
-    result = tl.zeros([BLOCK_SIZE], dtype=data.type.element_ty)
-    for target_rank in range(num_ranks):
-        result += iris.load(data + offsets, source_rank, target_rank, heap_bases, mask=mask)
-
-    # Store data to result buffer
+    result = iris.load(data + offsets, source_rank, partner, heap_bases, mask=mask)
     tl.store(results + offsets, result, mask=mask)
 
 
@@ -58,8 +54,9 @@ def test_load_api(dtype, BLOCK_SIZE):
     num_ranks = shmem.get_num_ranks()
     heap_bases = shmem.get_heap_bases()
     source_rank = shmem.get_rank()
+    partner = int((source_rank + num_ranks // 2) % num_ranks)
 
-    data = shmem.ones(BLOCK_SIZE, dtype=dtype)
+    data = shmem.full((BLOCK_SIZE,), source_rank, dtype=dtype)
     results = shmem.zeros_like(data)
 
     grid = lambda meta: (1,)
@@ -67,7 +64,7 @@ def test_load_api(dtype, BLOCK_SIZE):
     shmem.barrier()
 
     # Verify the result
-    expected = torch.ones(BLOCK_SIZE, dtype=dtype, device="cuda") * num_ranks
+    expected = torch.ones(BLOCK_SIZE, dtype=dtype, device="cuda") * partner
 
     try:
         torch.testing.assert_close(results, expected, rtol=0, atol=0)

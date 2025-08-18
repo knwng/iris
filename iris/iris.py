@@ -356,7 +356,7 @@ def load(pointer, to_rank, from_rank, heap_bases, mask=None):
     Returns:
         Block: The loaded value from the target memory location.
     """
-    translated_ptr = __translate(pointer, from_rank, to_rank, heap_bases)
+    translated_ptr = __translate(pointer, to_rank, from_rank, heap_bases)
     result = tl.load(translated_ptr, mask=mask)
     return result
 
