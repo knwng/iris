@@ -54,6 +54,8 @@ jobs:
       - name: Run Iris Tests with ${{ matrix.ranks }} MPI ranks
         run: |
           apptainer exec ~/apptainer/iris-dev.sif bash -c "
+            set -e  # Exit on any error
+            
             # Install iris first
             pip install -e .
 
