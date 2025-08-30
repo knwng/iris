@@ -31,6 +31,16 @@ from .util import (
 
 from . import hip
 
+# Import logging functionality
+from .logging import (
+    set_logger_level,
+    logger,
+    DEBUG,
+    INFO,
+    WARNING,
+    ERROR,
+)
+
 # Pipe allocations via finegrained allocator
 current_dir = os.path.dirname(__file__)
 # Look for the library in the installed package location
@@ -69,4 +79,10 @@ __all__ = [
     "do_bench",
     "memset_tensor",
     "hip",
+    "set_logger_level",
+    "logger",
+    "DEBUG",
+    "INFO",
+    "WARNING",
+    "ERROR",
 ]
