@@ -143,13 +143,13 @@ class Iris:
             dtype (torch.dtype, optional): the desired data type of returned Tensor.
                 Default: if None, defaults to the dtype of input.
             layout (torch.layout, optional): the desired layout of returned tensor.
-                Default: if None, defaults to the layout of input.
+                Default: if None, defaults to the layout of input. Note: Iris tensors are always contiguous (strided).
             device (torch.device, optional): the desired device of returned tensor.
-                Default: if None, defaults to the device of input.
+                Default: if None, defaults to the device of input. Must be compatible with this Iris instance.
             requires_grad (bool, optional): If autograd should record operations on the returned tensor.
                 Default: False.
             memory_format (torch.memory_format, optional): the desired memory format of returned Tensor.
-                Default: torch.preserve_format. If preserve_format is provided, input must be contiguous, otherwise it must be torch.contiguous_format.
+                Default: torch.preserve_format.
         """
         self.debug(
             f"zeros_like: input_shape = {input.shape}, dtype = {dtype}, device = {device}, requires_grad = {requires_grad}"
@@ -161,26 +161,10 @@ class Iris:
         if layout is None:
             layout = input.layout
         if device is None:
-            device = self.device
+            device = input.device
 
-        if not self.__is_valid_device(device):
-            raise RuntimeError(
-                f"Device mismatch: requested device {device} but Iris instance is on device {self.device}. "
-                f"Iris only supports tensors on its own device."
-            )
-
-        # Verify memory format - Iris only supports contiguous format for now
-        if memory_format == torch.preserve_format:
-            # If preserving format, check if input is already contiguous
-            if not input.is_contiguous():
-                raise RuntimeError(
-                    "Cannot preserve memory format: input tensor is not contiguous. "
-                    "Iris only supports torch.contiguous_format."
-                )
-        elif memory_format != torch.contiguous_format:
-            raise RuntimeError(
-                f"Memory format {memory_format} is not supported. Iris only supports torch.contiguous_format."
-            )
+        # Validate device compatibility with Iris
+        self.__throw_if_invalid_device(device)
 
         # Get the size from input tensor
         size = input.size()
@@ -193,6 +177,12 @@ class Iris:
         # Reshape to match input size
         new_tensor = new_tensor.reshape(size)
 
+        # Apply the requested memory format
+        new_tensor = self.__apply_memory_format(new_tensor, size, memory_format, input)
+
+        # Apply the requested layout
+        new_tensor = self.__apply_layout(new_tensor, layout)
+
         # Set requires_grad if specified
         if requires_grad:
             new_tensor.requires_grad_()
@@ -200,11 +190,20 @@ class Iris:
         return new_tensor
 
     def arange(
-        self, start=0, end=None, step=1, out=None, dtype=None, layout=torch.strided, device=None, requires_grad=False
+        self, start=0, end=None, step=1, *, out=None, dtype=None, layout=torch.strided, device=None, requires_grad=False
     ):
         """
         Returns a 1-D tensor of size ⌈(end - start) / step⌉ with values from the interval [start, end)
-        taken with common difference step beginning from start.
+        taken with common difference step beginning from start. The tensor is allocated on the symmetric heap.
+
+        Note: When using floating-point dtypes (especially reduced precision types like bfloat16),
+        the results may be affected by floating-point rounding behavior. Some values in the sequence
+        might not be exactly representable in certain floating-point formats, which can lead to
+        repeated values or unexpected rounding. For precise sequences, it is recommended to use
+        integer dtypes instead of floating-point dtypes.
+
+        Note that non-integer step is subject to floating point rounding errors when comparing
+        against end; to avoid inconsistency, we advise subtracting a small epsilon from end in such cases.
 
         Args:
             start (Number, optional): the starting value for the set of points. Default: 0.
@@ -212,36 +211,75 @@ class Iris:
             step (Number, optional): the gap between each pair of adjacent points. Default: 1.
             out (Tensor, optional): the output tensor.
             dtype (torch.dtype, optional): the desired data type of returned tensor.
+                Default: if None, uses a global default (see torch.get_default_dtype()).
+                If dtype is not given, infer the data type from the other input arguments.
+                If any of start, end, or step are floating-point, the dtype is inferred
+                be the default dtype, see get_default_dtype(). Otherwise, the dtype is inferred
+                to be torch.int64.
             layout (torch.layout, optional): the desired layout of returned Tensor. Default: torch.strided.
+                Note: Iris tensors always use `torch.strided` regardless of this parameter.
             device (torch.device, optional): the desired device of returned tensor.
+                Default: if None, uses the current device for the default tensor type.
             requires_grad (bool, optional): If autograd should record operations on the returned tensor. Default: False.
         """
-        self.debug(f"arange: start = {start}, end = {end}, step = {step}, dtype = {dtype}")
+        self.debug(f"arange: start = {start}, end = {end}, step = {step}, dtype = {dtype}, device = {device}")
 
         # Handle the case where only one argument is provided (end)
         if end is None:
             end = start
             start = 0
+
+        # Validate inputs
+        if step == 0:
+            raise ValueError("step must be non-zero")
+
+        # Validate step direction consistency
+        if step > 0 and start >= end:
+            raise ValueError(f"Invalid range: start >= end with positive step (start={start}, end={end}, step={step})")
+        elif step < 0 and start <= end:
+            raise ValueError(f"Invalid range: start <= end with negative step (start={start}, end={end}, step={step})")
+
         # Calculate the number of elements
         num_elements = math.ceil((end - start) / step)
+
         # Infer dtype if not provided
         if dtype is None:
             if any(isinstance(x, float) for x in [start, end, step]):
                 dtype = torch.get_default_dtype()
             else:
                 dtype = torch.int64
+
+        # Use current device if none specified
+        if device is None:
+            device = self.device
+
+        # Validate device compatibility with Iris
+        self.__throw_if_invalid_device(device)
+
         if out is not None:
             self.__throw_if_invalid_output_tensor(out, num_elements, dtype)
             tensor = out
         else:
             tensor = self.allocate(num_elements=num_elements, dtype=dtype)
-        tensor[:] = torch.arange(start, end, step, dtype=dtype, device="cuda")
+
+        target_device = tensor.device
+        arange_tensor = torch.arange(start, end, step, dtype=dtype, device=target_device)
+
+        tensor[:] = arange_tensor
+
+        tensor = self.__apply_layout(tensor, layout)
+
         if requires_grad:
             tensor.requires_grad_()
+
         return tensor
 
     def zeros(self, *size, dtype=torch.int, device=None, requires_grad=False, **kwargs):
         self.debug(f"zeros: size = {size}, dtype = {dtype}, device = {device}, requires_grad = {requires_grad}")
+
+        # Validate device
+        self.__throw_if_invalid_device(device)
+
         size, num_elements = self.parse_size(size)
         tensor = self.allocate(num_elements=num_elements, dtype=dtype)
         tensor.zero_()
@@ -262,6 +300,10 @@ class Iris:
         self.debug(
             f"randn: size = {size}, dtype = {dtype}, device = {device}, requires_grad = {requires_grad}, pin_memory = {pin_memory}"
         )
+
+        # Validate device
+        self.__throw_if_invalid_device(device)
+
         size, num_elements = self.parse_size(size)
         tensor = self.allocate(num_elements=num_elements, dtype=dtype)
         random_data = torch.randn(num_elements, generator=generator, dtype=dtype, device=device, layout=layout)
@@ -285,6 +327,9 @@ class Iris:
             requires_grad (bool, optional): If autograd should record operations on the returned tensor. Default: False.
         """
         self.debug(f"ones: size = {size}, dtype = {dtype}, device = {device}, requires_grad = {requires_grad}")
+
+        # Validate device
+        self.__throw_if_invalid_device(device)
 
         # Handle the case where size is provided as a single tuple/list
         if len(size) == 1 and isinstance(size[0], (tuple, list)):
@@ -326,11 +371,17 @@ class Iris:
         tensor = self.allocate(num_elements=num_elements, dtype=dtype)
         return tensor.reshape(size)
 
-    def randint(self, size, low, high, dtype=torch.int):
-        self.debug(f"randint: size = {size}, low = {low}, high = {high}, dtype = {dtype}")
+    def randint(self, size, low, high, dtype=torch.int, device=None):
+        self.debug(f"randint: size = {size}, low = {low}, high = {high}, dtype = {dtype}, device = {device}")
+
+        # Validate device
+        self.__throw_if_invalid_device(device)
+
         size, num_elements = self.parse_size(size)
         tensor = self.allocate(num_elements=num_elements, dtype=dtype)
-        tensor[:] = torch.randint(low, high, size, device="cuda", dtype=dtype)
+        # Use specified device or fall back to current device
+        target_device = device if device is not None else self.device
+        tensor[:] = torch.randint(low, high, size, device=target_device, dtype=dtype)
         return tensor.reshape(size)
 
     def linspace(self, start, end, steps, dtype=torch.float):
@@ -378,14 +429,241 @@ class Iris:
         if tensor.dtype != dtype:
             raise RuntimeError(f"The output tensor has dtype {tensor.dtype}, but {dtype} is required")
 
+    def __throw_if_invalid_device(self, device):
+        """
+        Throw a RuntimeError if the requested device is not compatible with this Iris instance.
+
+        Args:
+            device: The requested device (can be string, torch.device, or None)
+
+        Raises:
+            RuntimeError: If the device is not compatible
+        """
+        if not self.__is_valid_device(device):
+            raise RuntimeError(
+                f"Device mismatch: requested device {device} but Iris instance is on device {self.device}. "
+                f"Iris only supports tensors on its own device."
+            )
+
+    def __apply_memory_format(
+        self, tensor: torch.Tensor, size: tuple, memory_format: torch.memory_format, input_tensor: torch.Tensor = None
+    ):
+        """
+        Apply the requested memory format to a tensor by setting appropriate strides.
+        This keeps the tensor on the symmetric heap while changing how PyTorch interprets the memory layout.
+
+        Args:
+            tensor: The tensor to modify
+            size: The tensor's size/dimensions
+            memory_format: The desired memory format
+            input_tensor: The original input tensor (needed for preserve_format detection)
+        """
+        if memory_format == torch.contiguous_format:
+            # Default format, no changes needed
+            return tensor
+        elif memory_format == torch.channels_last and len(size) == 4:
+            # For channels_last format: preserve shape (N, C, H, W) but change strides
+            # channels_last strides: [C*H*W, 1, C*W, C] for shape (N, C, H, W)
+            N, C, H, W = size[0], size[1], size[2], size[3]
+            # Keep the original shape (N, C, H, W) but use channels_last strides
+            tensor = self.__create_tensor_with_strides(tensor, size, (C * H * W, 1, C * W, C))
+            return tensor
+        elif memory_format == torch.channels_last_3d and len(size) == 5:
+            # For channels_last_3d format: preserve shape (N, C, D, H, W) but change strides
+            # channels_last_3d strides: [C*D*H*W, 1, C*D*W, C*W, C] for shape (N, C, D, H, W)
+            N, C, D, H, W = size[0], size[1], size[2], size[3], size[4]
+            # Keep the original shape (N, C, D, H, W) but use channels_last_3d strides
+            tensor = self.__create_tensor_with_strides(tensor, size, (C * D * H * W, 1, C * D * W, C * W, C))
+            return tensor
+        elif memory_format == torch.preserve_format:
+            # For preserve_format, we need to detect the input tensor's memory format
+            # and apply the same format to the output
+            if input_tensor is not None:
+                # Check the actual memory format of the input tensor
+                if len(size) == 4:
+                    # Check if input tensor is in channels_last format by examining strides
+                    # channels_last format has strides[1] == 1 (channels dimension is contiguous)
+                    input_strides = input_tensor.stride()
+                    if len(input_strides) == 4 and input_strides[1] == 1:
+                        # Input is in channels_last format, preserve it
+                        # Use the input tensor's actual shape, not the size parameter
+                        input_shape = input_tensor.shape
+                        if len(input_shape) == 4:
+                            # Input is already in channels_last format (N, H, W, C)
+                            new_size = input_shape
+                            # Use the input tensor's strides directly
+                            tensor = self.__create_tensor_with_strides(tensor, new_size, input_strides)
+                            return tensor
+                elif len(size) == 5:
+                    # Check if input tensor is in channels_last_3d format
+                    input_strides = input_tensor.stride()
+                    if len(input_strides) == 5 and input_strides[1] == 1:
+                        # Input is in channels_last_3d format, preserve it
+                        # Use the input tensor's actual shape, not the size parameter
+                        input_shape = input_tensor.shape
+                        if len(input_shape) == 5:
+                            # Input is already in channels_last_3d format (N, D, H, W, C)
+                            new_size = input_shape
+                            # Use the input tensor's strides directly
+                            tensor = self.__create_tensor_with_strides(tensor, new_size, input_strides)
+                            return tensor
+            # If no special format detected or no input tensor provided, use contiguous format
+            return tensor
+        else:
+            # Unsupported format or dimension combination
+            self.debug(
+                f"Warning: Memory format {memory_format} not supported for {len(size)}D tensor, using contiguous format"
+            )
+            # For unsupported formats, return the tensor as-is (contiguous)
+            return tensor
+
+    def __create_tensor_with_strides(self, original_tensor: torch.Tensor, size: tuple, strides: tuple) -> torch.Tensor:
+        """
+        Create a new tensor with the specified strides while keeping the data on the symmetric heap.
+
+        Args:
+            original_tensor: The original tensor (source of data and heap allocation)
+            size: The tensor's size/dimensions
+            strides: The desired strides for the new memory format
+
+        Returns:
+            A new tensor with the specified strides, data copied from original, on the same heap
+        """
+
+        # First, create a temporary tensor with the correct strides using PyTorch
+        temp_tensor = torch.empty_strided(size, strides, dtype=original_tensor.dtype, device=original_tensor.device)
+
+        # Handle different cases based on whether size changes and what the strides indicate
+        if size != original_tensor.shape:
+            # Size is different - this might be a format change that requires permutation
+            # Check if this is a channels_last format by comparing strides
+            if len(size) == 4:
+                # For channels_last: expected strides are [H*W*C, 1, W*C, C] for shape (N, H, W, C)
+                N, H, W, C = size[0], size[1], size[2], size[3]
+                expected_strides = (H * W * C, 1, W * C, C)
+                if strides == expected_strides:
+                    permuted = original_tensor.permute(0, 2, 3, 1)  # (N, C, H, W) -> (N, H, W, C)
+                else:
+                    # If the size differs for other reasons, do not permute; just reshape if possible
+                    try:
+                        permuted = original_tensor.reshape(size)
+                    except Exception:
+                        raise ValueError(
+                            "Cannot safely permute or reshape tensor: size differs from original shape for unknown reason."
+                        )
+            elif len(size) == 5:
+                # For channels_last_3d: expected strides are [D*H*W*C, 1, H*W*C, W*C, C] for shape (N, D, H, W, C)
+                N, D, H, W, C = size[0], size[1], size[2], size[3], size[4]
+                expected_strides = (D * H * W * C, 1, H * W * C, W * C, C)
+                if strides == expected_strides:
+                    permuted = original_tensor.permute(0, 2, 3, 4, 1)  # (N, C, D, H, W) -> (N, D, H, W, C)
+                else:
+                    # If the size differs for other reasons, do not permute; just reshape if possible
+                    try:
+                        permuted = original_tensor.reshape(size)
+                    except Exception:
+                        raise ValueError(
+                            "Cannot safely permute or reshape tensor: size differs from original shape for unknown reason."
+                        )
+            else:
+                # For other dimensions, just try to reshape
+                try:
+                    permuted = original_tensor.reshape(size)
+                except Exception:
+                    raise ValueError(
+                        "Cannot safely permute or reshape tensor: size differs from original shape for unknown reason."
+                    )
+        else:
+            # Size is the same - this is a stride-only change (like channels_last with preserved shape)
+            # We need to reorder the data to match the new stride pattern
+            if len(size) == 4:
+                # Check if this is channels_last format with preserved shape
+                N, C, H, W = size[0], size[1], size[2], size[3]
+                expected_strides = (C * H * W, 1, C * W, C)
+                if strides == expected_strides:
+                    permuted = original_tensor
+                else:
+                    permuted = original_tensor
+            elif len(size) == 5:
+                # Check if this is channels_last_3d format with preserved shape
+                N, C, D, H, W = size[0], size[1], size[2], size[3], size[4]
+                expected_strides = (C * D * H * W, 1, C * D * W, C * W, C)
+                if strides == expected_strides:
+                    permuted = original_tensor
+                else:
+                    permuted = original_tensor
+            else:
+                permuted = original_tensor
+
+        # Copy the permuted data to the temporary tensor
+        temp_tensor.copy_(permuted)
+
+        # Now allocate a new tensor on our symmetric heap
+        num_elements = math.prod(size)
+        heap_tensor = self.allocate(num_elements, original_tensor.dtype)
+
+        # Reshape to the desired size
+        heap_tensor = heap_tensor.reshape(size)
+
+        # Copy the data from the temporary tensor to our heap tensor
+        heap_tensor.copy_(temp_tensor)
+
+        # Clean up the temporary tensor
+        del temp_tensor
+
+        # Now we need to create a view with the correct strides
+        # We can't use as_strided directly on our heap tensor, but we can
+        # create a new tensor with the right strides and copy the data again
+        final_tensor = torch.as_strided(heap_tensor, size, strides)
+
+        return final_tensor
+
+    def __apply_layout(self, tensor: torch.Tensor, layout: torch.layout) -> torch.Tensor:
+        """
+        Apply the requested layout to a tensor.
+
+        Args:
+            tensor: The tensor to modify
+            layout: The desired layout
+
+        Returns:
+            Tensor with the requested layout
+        """
+
+        if layout == torch.strided:
+            # Strided layout is the default - no changes needed
+            return tensor
+        else:
+            # Only support strided layout for now
+            raise ValueError(f"Layout {layout} not supported. Only torch.strided is currently supported.")
+
     def __tensor_on_device(self, tensor: torch.Tensor):
-        return tensor.device == self.device
+        # Get the Iris device from memory_pool.device
+        iris_device = self.get_device()
+        tensor_device = tensor.device
+
+        # For CUDA devices, check if they're compatible
+        if tensor_device.type == "cuda" and iris_device.type == "cuda":
+            if iris_device.index is None:
+                return True
+            return tensor_device.index == iris_device.index
+
+        # For non-CUDA devices, they must be exactly equal
+        return tensor_device == iris_device
 
     def __on_symmetric_heap(self, tensor: torch.Tensor):
-        return (
-            tensor.data_ptr() >= self.heap_bases[self.cur_rank]
-            and tensor.data_ptr() < self.heap_bases[self.cur_rank] + self.heap_size
-        )
+        # Special case for empty tensors - they might not have a valid data_ptr
+        if tensor.numel() == 0:
+            self.debug("Empty tensor detected, skipping heap check")
+            return True
+
+        # Convert CUDA pointer to integer for comparison
+        tensor_ptr = int(tensor.data_ptr())
+        heap_base = int(self.heap_bases[self.cur_rank])
+
+        result = tensor_ptr >= heap_base and tensor_ptr < heap_base + self.heap_size
+
+        return result
 
     def __is_valid_device(self, device) -> bool:
         """
