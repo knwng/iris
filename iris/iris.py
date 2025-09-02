@@ -899,10 +899,16 @@ class Iris:
     def get_heap_bases(self):
         return self.heap_bases
 
-    def barrier(self):
-        # Wait for all GPUs to finish work
-        torch.cuda.synchronize()
-        # MPI barrier
+    def barrier(self, stream: torch.cuda.Stream | None = None):
+        """
+        Global barrier across ranks.
+        - If stream is None: legacy behavior (device-wide sync).
+        - If stream is given: wait only for that stream before MPI_Barrier.
+        """
+        if stream is None:
+            torch.cuda.synchronize()
+        else:
+            stream.synchronize()
         world_barrier()
 
     def get_device(self):
