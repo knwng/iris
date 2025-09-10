@@ -24,12 +24,19 @@ Prefer using the convenience factory over calling the constructor directly:
 Use Iris-aware logging that automatically annotates each message with the current rank and world size. This is helpful when debugging multi-rank programs.
 
 ```{eval-rst}
+.. autofunction:: iris.logging.set_logger_level
 .. automethod:: iris.iris.Iris.debug
 .. automethod:: iris.iris.Iris.info
 .. automethod:: iris.iris.Iris.warning
 .. automethod:: iris.iris.Iris.error
 ```
 
+
+## Utility Functions
+
+```{eval-rst}
+.. autofunction:: iris.util.do_bench
+```
 
 ## Broadcast Helper
 
