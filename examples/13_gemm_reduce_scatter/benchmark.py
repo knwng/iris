@@ -7,10 +7,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import triton
 import random
-import sys
-import os
 import argparse
-import json
 
 from examples.common.utils import (
     JSONWriter,
@@ -21,7 +18,7 @@ from examples.common.utils import (
 import iris
 
 from matmul_wrapper import matmul_reduce_scatter
-from examples.common.validation import validate_gemm, validate_gemm_reduce_scatter
+from examples.common.validation import validate_gemm_reduce_scatter
 
 torch.manual_seed(123)
 random.seed(123)
@@ -124,7 +121,7 @@ def _worker(local_rank: int, world_size: int, init_url: str, args: dict):
 
     compute_buffer = shmem.zeros((args["m"], args["n"]), device="cuda", dtype=A.dtype)
     local_output = shmem.zeros((args["m"] // world_size, args["n"]), device="cuda", dtype=A.dtype)
-    
+
     total_blocks_M = triton.cdiv(args["m"], args["BLK_M"])
     total_blocks_N = triton.cdiv(args["n"], args["BLK_N"])
     total_tiles = total_blocks_M * total_blocks_N

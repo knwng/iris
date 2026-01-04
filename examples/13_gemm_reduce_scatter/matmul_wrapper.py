@@ -3,9 +3,6 @@
 
 import torch
 import triton
-import random
-import sys
-import os
 
 from gemm_reduce_scatter import persistent_gemm_reduce_scatter
 
@@ -58,7 +55,7 @@ class matmul_reduce_scatter(torch.autograd.Function):
         local_M = rows_per_rank
         if rank == world_size - 1:
             local_M = M - rank * rows_per_rank
-        
+
         assert c_local.shape[0] == local_M, f"c_local shape mismatch: expected {local_M}, got {c_local.shape[0]}"
         assert c_local.shape[1] == N, f"c_local shape mismatch: expected {N}, got {c_local.shape[1]}"
 

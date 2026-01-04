@@ -6,8 +6,6 @@ import sys
 import pytest
 import torch
 import triton
-import triton.language as tl
-import numpy as np
 import iris
 
 import importlib.util
@@ -15,6 +13,7 @@ from pathlib import Path
 from examples.common.utils import (
     Timestamps,
 )
+
 current_dir = Path(__file__).parent
 sys.path.append(str(current_dir / "../../examples/13_gemm_reduce_scatter/"))
 sys.path.append(str(current_dir / "../../"))
@@ -29,6 +28,7 @@ validation_path = (current_dir / "../../examples/common/validation.py").resolve(
 validation_spec = importlib.util.spec_from_file_location("validation", validation_path)
 validation_module = importlib.util.module_from_spec(validation_spec)
 validation_spec.loader.exec_module(validation_module)
+
 
 @pytest.mark.parametrize(
     "dtype",
@@ -85,7 +85,7 @@ def test_gemm_reduce_scatter(dtype, m, n, k, BLK_M, BLK_N, BLK_K):
 
     compute_buffer = shmem.zeros((m, n), device="cuda", dtype=A.dtype)
     local_output = shmem.zeros((m // world_size, n), device="cuda", dtype=A.dtype)
-    
+
     total_blocks_M = triton.cdiv(m, BLK_M)
     total_blocks_N = triton.cdiv(n, BLK_N)
     total_tiles = total_blocks_M * total_blocks_N
@@ -106,7 +106,7 @@ def test_gemm_reduce_scatter(dtype, m, n, k, BLK_M, BLK_N, BLK_K):
         shmem.barrier()
         tile_completed.zero_()
         shmem.barrier()
-        
+
     def run_experiment():
         nonlocal local_output
         nonlocal compute_buffer
@@ -152,7 +152,7 @@ def test_gemm_reduce_scatter(dtype, m, n, k, BLK_M, BLK_N, BLK_K):
     shmem.barrier()
     preamble()
     shmem.barrier()
-    
+
     shmem.info("Validating...")
 
     matmul_module.matmul_reduce_scatter.set_debug(False)

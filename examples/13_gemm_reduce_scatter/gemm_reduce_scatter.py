@@ -5,8 +5,6 @@ import triton
 import triton.language as tl
 from examples.common.utils import read_realtime
 
-import sys
-import os
 
 import iris
 
@@ -90,7 +88,7 @@ def compute_output_partition(cur_rank, world_size, M, N, BLOCK_SIZE_M, BLOCK_SIZ
     rows_per_rank = tl.cdiv(M, world_size)
     start_row = cur_rank * rows_per_rank
     end_row = min((cur_rank + 1) * rows_per_rank, M)
-    
+
     return start_row, end_row
 
 
@@ -142,7 +140,7 @@ def persistent_gemm_reduce_scatter(
     total_tiles = num_pid_m * num_pid_n
 
     start_row, end_row = compute_output_partition(cur_rank, world_size, M, N, BLOCK_SIZE_M, BLOCK_SIZE_N)
-    
+
     tl.assume(stride_am > 0)
     tl.assume(stride_ak > 0)
     tl.assume(stride_bn > 0)
@@ -203,7 +201,7 @@ def persistent_gemm_reduce_scatter(
         rn = tl.max_contiguous(tl.multiple_of(rn, BLOCK_SIZE_N), BLOCK_SIZE_N)
         c_mask = (rm[:, None] < M) & (rn[None, :] < N)
         if world_size == 1:
-            C_ = c_local + rm[:, None] * stride_cm + rn[None, :] * stride_cn           
+            C_ = c_local + rm[:, None] * stride_cm + rn[None, :] * stride_cn
             tl.store(C_, c, c_mask)
         else:
             C_ = C + rm[:, None] * stride_cm + rn[None, :] * stride_cn
@@ -267,25 +265,28 @@ def persistent_gemm_reduce_scatter(
                     tile_start_row = max(0, start_row - global_row_start)
                     tile_end_row = min(BLOCK_SIZE_M, end_row - global_row_start)
                     local_start_row = max(global_row_start, start_row) - start_row
-                    
+
                     acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=acc_dtype)
                     for remote_rank in range(world_size):
                         remote_data = iris.load(C + sub_offset, cur_rank, remote_rank, heap_bases, mask=sub_mask)
                         acc += remote_data
-                    
+
                     row_idx = tl.arange(0, BLOCK_SIZE_M)
                     col_idx = tl.arange(0, BLOCK_SIZE_N)
-                    
-                    local_offsets = (local_start_row + row_idx[:, None]) * stride_cm_local + \
-                                (rn_start + start_col_sub + col_idx[None, :]) * stride_cn_local
-                    
+
+                    local_offsets = (local_start_row + row_idx[:, None]) * stride_cm_local + (
+                        rn_start + start_col_sub + col_idx[None, :]
+                    ) * stride_cn_local
+
                     local_ptr_block = c_local + local_offsets
-                    
-                    valid_mask = (row_idx[:, None] >= tile_start_row) & \
-                                (row_idx[:, None] < tile_end_row) & \
-                                (col_idx[None, :] < BLOCK_SIZE_N) & \
-                                sub_mask
-                    
+
+                    valid_mask = (
+                        (row_idx[:, None] >= tile_start_row)
+                        & (row_idx[:, None] < tile_end_row)
+                        & (col_idx[None, :] < BLOCK_SIZE_N)
+                        & sub_mask
+                    )
+
                     tl.store(local_ptr_block, acc, mask=valid_mask, cache_modifier=".wt")
 
         if COLLECT_TIMESTAMPS:
